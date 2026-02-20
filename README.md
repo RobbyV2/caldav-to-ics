@@ -1,197 +1,88 @@
-# caldav-ics-sync
+# CalDAV to ICS Synchronizer
 
-Next.js frontend with Rust backend API server using file-system based routing.
+A standalone server to synchronize CalDAV events from various enterprise and personal servers (such as Feishu, iCloud, Nextcloud) to a unified ICS file format.
 
-## Branches
+This project utilizes a Rust/Axum API backend with XML parsing capabilities alongside a Next.js 15 frontend.
 
-- **main**: The active development branch (Rust Backend + Next.js Frontend).
-- **static**: Rust WASM + Next.js (no backend server). Ideal for static hosting.
-- **single-server**: A variation with a single server setup.
+## Key Features
 
-## Architecture
+- **Automated Background Synchronization:** Set `AUTO_SYNC_INTERVAL_MINUTES` in your `.env` to synchronize calendars in the background.
+- **Feishu / Strict CalDAV Compatibility:** Bypasses parser bugs (e.g., `python-caldav` Issue #459) by interacting directly at the raw WebDAV and `PROPFIND` layers, extracting `VEVENT` data strings without strict payload evaluation.
+- **Flexible Storage Policies:** Save synced calendars to the disk for persistence or keep them in volatile memory.
+- **Tech Stack:**
+  - Rust Backend (Axum, Tokio, Reqwest, Roxmltree) handles requests over port 3000.
+  - Next.js (React 19) provides the synchronization interface proxying requests from port 3001.
 
-This template uses a two-server architecture where Rust is the main entry point:
+---
 
-- **Rust Server** (Port 3000) - Main entry point handling API routes
-- **Next.js Server** (Port 3001) - Frontend with hot reload in dev, optimized build in production
-- Rust proxies non-API requests to Next.js
-- Browser connects to `http://localhost:3000` for everything
+## Running the Project
 
-## Features
+### Environment Initialization
 
-- **Rust Backend**: Fast, type-safe API server using Axum
-- **Rust WASM**: Client-side Rust code via WebAssembly
-- **Next.js Frontend**: Modern React framework with TypeScript
-- **Single Port Access**: All requests go through Rust server on port 3000
-- **CORS Handling**: Automatic CORS configuration
-- **Hot Reload**: Development mode with Next.js hot module replacement
-- **Production Ready**: Standalone Next.js build for optimal performance
-
-## Quick Start
-
-### Prerequisites
-
-- Rust (latest stable)
-- Node.js 18+
-- [Bun](https://bun.sh/) (v1.0+)
-- [wasm-pack](https://rustwasm.github.io/wasm-pack/installer/)
-- [just](https://github.com/casey/just) command runner
-
-### Development Mode
+Copy the standard template for environment details.
 
 ```bash
-just src dev
+cp .env.example .env.local
 ```
 
-This starts:
-
-- Builds WASM (dev mode)
-- Rust server on port 3000
-- Next.js dev server on port 3001
-- Visit `http://localhost:3000`
-
-### Production Mode
-
-```bash
-just src build-all
-# Run production servers
-./target/release/server    # Terminal 1
-bun start                   # Terminal 2
-```
-
-## Project Structure
-
-```
-.
-├── src/
-│   ├── api/           # API route handlers
-│   ├── server/        # Server configuration and routing
-│   └── bin/server.rs  # Main Rust entry point
-├── wasm/              # Rust WASM source
-│   └── src/lib.rs     # WASM entry point
-├── app/
-│   ├── lib/           # Frontend utilities and API client
-│   ├── page.tsx       # Home page
-│   └── layout.tsx     # Root layout
-├── Cargo.toml         # Workspace config
-├── package.json       # Node.js dependencies
-└── justfile          # Build and run commands
-```
-
-## WASM Support
-
-The template includes support for Rust WASM modules.
-
-1.  Code is in `wasm/src/lib.rs`
-2.  Built to `public/wasm/`
-3.  Loaded in frontend using `import` (see `app/wasm/page.tsx` for example)
-
-To build WASM manually:
-
-```bash
-just src build-wasm
-```
-
-## Environment Variables
-
-Create a `.env.local` file:
+Fill in your CalDAV properties within `.env.local`:
 
 ```env
-SERVER_PORT=3000
-SERVER_HOST=127.0.0.1
-PORT=3001
-HOSTNAME=localhost
-RUST_LOG=info
+# CalDAV Authentication & URL
+CALDAV_URL=https://your-caldav-server.example.com
+CALDAV_USERNAME=username
+CALDAV_PASSWORD=secret_password
+
+# ICS Storage Configuration
+# Strategies: 'memory-only', 'disk-only', 'memory-and-disk'
+STORAGE_STRATEGY=memory-and-disk
+STORAGE_DISK_PATH=./data/caldav-sync-cache.ics
+
+# Background sync interval in minutes
+AUTO_SYNC_INTERVAL_MINUTES=60
 ```
 
-For remote access (e.g., Codespaces):
+### Docker (Recommended)
 
-- Set `SERVER_HOST=0.0.0.0`
-- Set `HOSTNAME=0.0.0.0` (dev mode only)
-
-## Adding New API Routes
-
-1. Add route handler in `src/api/mod.rs`:
-
-```rust
-async fn my_route() -> Json<MyResponse> {
-    Json(MyResponse { /* ... */ })
-}
-
-pub fn routes() -> Router {
-    Router::new()
-        .route("/hello", get(hello))
-        .route("/my-route", get(my_route))  // Add here
-}
-```
-
-2. Call from frontend in `app/lib/api.ts`:
-
-```typescript
-export async function myRoute(): Promise<MyResponse> {
-  const response = await fetch('/api/my-route')
-  return handleResponse<MyResponse>(response)
-}
-```
-
-## Development Commands
-
-### Using Just
+This service is fully containerized with a multi-stage build.
 
 ```bash
-just                        # List all available commands
-just src                    # List all src commands
+# Build the application
+docker build -t caldav-to-ics .
 
-# Development (run.just)
-just src dev                # Run BOTH servers together (Bash/WSL/Unix only!)
-just src api                # Run Rust API only
-just src frontend           # Run Next.js only
-just src api-release        # Run Rust API (release mode)
-just src frontend-prod      # Run Next.js (production mode)
-
-# Build (build.just)
-just src build              # Build Rust for production
-just src build-api          # Build Rust API for production
-just src build-frontend     # Build Next.js for production
-just src build-wasm         # Build WASM module
-just src build-all          # Build both for production
-just src check              # Check Rust code without building
-
-# Format & Lint (build.just)
-just src fmt                # Format and lint ALL code (Rust + TypeScript)
-just src fmt-check          # Check formatting without changes
-just src fmt-rust           # Format Rust only
-just src fmt-ts             # Format TypeScript only
-
-# Test (test.just)
-just src test               # Run Rust tests
-
-# Maintenance (justfile)
-just src install            # Install dependencies
-just src clean              # Clean build artifacts
+# Run the container, binding it to port 3000 and mounting the data directory.
+docker run -p 3000:3000 -v $(pwd)/data:/data caldav-to-ics
 ```
 
-## Tech Stack
+### Local Development
 
-### Backend (Rust)
+To work on the toolset locally:
 
-- **axum**: Modern web framework
-- **tokio**: Async runtime
-- **serde/serde_json**: Serialization
-- **tower-http**: HTTP middleware (CORS, tracing)
-- **tracing**: Structured logging
+1. **Install Frontend Dependencies:**
 
-### WASM (Rust)
+```bash
+bun install --frozen-lockfile
+```
 
-- **wasm-bindgen**: Rust/JS interoperability
-- **web-sys**: Web APIs
+1. **Launch development servers:**
 
-### Frontend (Next.js)
+```bash
+# Terminal 1 - Next.js
+bun run dev
 
-- **React 19**: UI framework
-- **Next.js 16**: React framework with App Router
-- **TypeScript**: Type safety
+# Terminal 2 - Rust Backend
+cargo run
+```
 
-## License
+Next.js acts behind port `3001`, navigate to the Rust Gateway available at `http://127.0.0.1:3000`.
 
-MIT
+---
+
+## User Interface
+
+By visiting the entry port, you can view the status interface to check background completion times and trigger manual synchronization.
+
+## Open Source Details
+
+- **License**: MIT
+- **CI/CD Configuration**: `.github/workflows/ci.yml` tests linting layouts using TS-ESLint Flat architecture and publishes new semantic versions pushed via tags to `ghcr.io`.

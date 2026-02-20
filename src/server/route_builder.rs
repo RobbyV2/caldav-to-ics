@@ -62,8 +62,8 @@ async fn proxy_to_nextjs(mut req: Request) -> Response {
     }
 }
 
-pub async fn register_routes() -> Router {
-    let api_routes = crate::api::routes();
+pub async fn register_routes(state: crate::api::sync::AppState) -> Router {
+    let api_routes = crate::api::routes(state);
 
     Router::new()
         .nest("/api", api_routes)

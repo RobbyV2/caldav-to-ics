@@ -1,0 +1,11 @@
+node_modules
+npm-debug.log
+bun.lock
+bun.lockb
+target
+.next
+.git
+.env
+.env.local
+.DS_Store
+*.pem

@@ -1,17 +1,8 @@
-use axum::{Json, Router, routing::get};
-use serde::{Deserialize, Serialize};
+use crate::api::sync::AppState;
+use axum::Router;
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct HelloResponse {
-    message: String,
-}
+pub mod sync;
 
-async fn hello() -> Json<HelloResponse> {
-    Json(HelloResponse {
-        message: "Hello World from Rust!".to_string(),
-    })
-}
-
-pub fn routes() -> Router {
-    Router::new().route("/hello", get(hello))
+pub fn routes(state: AppState) -> Router {
+    sync::routes(state)
 }

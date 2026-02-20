@@ -35,7 +35,15 @@ async fn main() -> anyhow::Result<()> {
         ])
         .allow_credentials(true);
 
-    let app = build_router().await.layer(cors);
+    let app_state = caldav_ics_sync::api::sync::AppState {
+        ics_cache: std::sync::Arc::new(tokio::sync::RwLock::new(None)),
+        last_synced: std::sync::Arc::new(tokio::sync::RwLock::new(None)),
+    };
+
+    // Initialize auto sync background loop
+    caldav_ics_sync::api::sync::start_auto_sync(app_state.clone());
+
+    let app = build_router(app_state).await.layer(cors);
 
     // Read host and port from environment variables
     let host = std::env::var("SERVER_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());

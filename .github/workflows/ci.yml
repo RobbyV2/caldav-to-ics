@@ -1,0 +1,78 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [ "main" ]
+    tags: [ "v*" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  format_lint:
+    name: Lint & Format
+    runs-on: ubuntu-latest
+    # Require workflow approval on forks explicitly via environment protection if possible,
+    # or just use default github action behavior for outside forks. 
+    # For PRs from forks, 'pull_request' triggers are subject to "Require approval for all outside collaborators".
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node/Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+          
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          
+      - name: Install JS Deps
+        run: bun install --frozen-lockfile
+        
+      - name: Check JS Formatting
+        run: bun run format:check
+        
+      - name: JS Linting
+        run: bun run lint
+        
+      - name: Rust Formatting
+        run: cargo fmt -- --check
+        
+      - name: Rust Clippy
+        run: cargo clippy -- -D warnings
+
+  publish_docker:
+    name: Build & Publish Docker Image (ghcr.io)
+    needs: format_lint
+    runs-on: ubuntu-latest
+    # Only run on push to main WHEN a tag is present OR just rely on tag push matching 'v*'
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Extract metadata for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}

@@ -4,8 +4,8 @@ import { Inter } from 'next/font/google'
 const inter = Inter({ subsets: ['latin'] })
 
 export const metadata = {
-  title: 'Rust + Next.js Template',
-  description: 'Full-stack template with Rust backend and Next.js frontend',
+  title: 'CalDAV to ICS',
+  description: 'Sync your CalDAV server to an ICS file seamlessly',
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
