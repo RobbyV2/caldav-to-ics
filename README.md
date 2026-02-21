@@ -58,6 +58,9 @@ services:
 > [!NOTE]
 > `AUTH_USERNAME` plus exactly one of `AUTH_PASSWORD` or `AUTH_PASSWORD_HASH` enables auth. Setting both password vars is an error. Generate a hash with: `echo -n "yourpassword" | argon2 yoursalt -id -e`
 
+> [!IMPORTANT]
+> When setting `AUTH_PASSWORD_HASH` via docker compose environment variables, you _must_ escape each `$` with another `$` (or just pass in an env file)
+
 ## Configuration
 
 All sync configuration (sources, destinations, credentials) is managed through the web UI. The only environment variables are for server tuning:
