@@ -60,10 +60,11 @@ pub async fn run_reverse_sync(
     );
     let caldav_client = Client::builder().default_headers(headers).build()?;
 
-    let calendar_base = if caldav_url.ends_with('/') {
-        format!("{}{}/", caldav_url, calendar_name)
+    let normalized_url = caldav_url.trim_end_matches('/');
+    let calendar_base = if normalized_url.ends_with(calendar_name) {
+        format!("{}/", normalized_url)
     } else {
-        format!("{}/{}/", caldav_url, calendar_name)
+        format!("{}/{}/", normalized_url, calendar_name)
     };
 
     let mut uploaded = 0;

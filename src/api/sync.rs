@@ -90,12 +90,12 @@ pub async fn fetch_events(
         calendar_path.to_string()
     } else {
         let parsed = reqwest::Url::parse(base_url)?;
-        format!(
-            "{}://{}{}",
-            parsed.scheme(),
-            parsed.host_str().unwrap_or(""),
-            calendar_path
-        )
+        let host = parsed.host_str().unwrap_or("");
+        let authority = match parsed.port() {
+            Some(port) => format!("{}:{}", host, port),
+            None => host.to_string(),
+        };
+        format!("{}://{}{}", parsed.scheme(), authority, calendar_path)
     };
 
     let report_body = r#"<?xml version="1.0" encoding="utf-8" ?>
