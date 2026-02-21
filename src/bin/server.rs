@@ -1,6 +1,13 @@
+use std::time::Duration;
+
 use axum::http::{HeaderName, Method, header};
+use axum::middleware;
 use caldav_ics_sync::api::AppState;
+use caldav_ics_sync::config::AppConfig;
+use caldav_ics_sync::server::auth::{AuthConfig, basic_auth_middleware};
 use caldav_ics_sync::server::build_router;
+use tokio_retry2::strategy::ExponentialBackoff;
+use tokio_retry2::{Retry, RetryError};
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tracing::info;
 
@@ -15,13 +22,16 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let data_dir = std::env::var("DATA_DIR").unwrap_or_else(|_| "./data".to_string());
-    std::fs::create_dir_all(&data_dir)?;
-    let db_path = format!("{}/caldav-sync.db", data_dir);
+    let cfg = AppConfig::load()?;
+
+    std::fs::create_dir_all(&cfg.data_dir)?;
+    let db_path = format!("{}/caldav-sync.db", cfg.data_dir);
     let conn = rusqlite::Connection::open(&db_path)?;
     conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
     caldav_ics_sync::db::init_db(&conn)?;
     info!("Database initialized at {}", db_path);
+
+    let proxy_url = cfg.proxy_url();
 
     let app_state = AppState {
         db: std::sync::Arc::new(std::sync::Mutex::new(conn)),
@@ -50,12 +60,32 @@ async fn main() -> anyhow::Result<()> {
         ])
         .allow_credentials(true);
 
-    let app = build_router(app_state).await.layer(cors);
+    let auth_config = AuthConfig::from_config(&cfg);
+    match &auth_config {
+        AuthConfig::Disabled => {
+            info!("HTTP Basic Auth disabled (AUTH_USERNAME not set or no password configured)");
+        }
+        AuthConfig::PlainText { username, .. } => {
+            info!(
+                "HTTP Basic Auth enabled for user '{}' (plain text)",
+                username
+            );
+        }
+        AuthConfig::Hashed { username, .. } => {
+            info!(
+                "HTTP Basic Auth enabled for user '{}' (argon2 hash)",
+                username
+            );
+        }
+    }
 
-    let host = std::env::var("SERVER_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
-    let port = std::env::var("SERVER_PORT").unwrap_or_else(|_| "6765".to_string());
-    let addr = format!("{}:{}", host, port);
+    let app = build_router(app_state, &proxy_url)
+        .await
+        .layer(middleware::from_fn(basic_auth_middleware))
+        .layer(axum::Extension(auth_config))
+        .layer(cors);
 
+    let addr = format!("{}:{}", cfg.server_host, cfg.server_port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
 
     info!("Starting server");
@@ -70,6 +100,106 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+const RETRY_BASE_MS: u64 = 30_000;
+const RETRY_MAX_MS: u64 = 300_000;
+const MAX_RETRIES: usize = 5;
+
+#[derive(Debug)]
+struct SyncError {
+    inner: anyhow::Error,
+    permanent: bool,
+}
+
+impl SyncError {
+    fn transient(e: impl Into<anyhow::Error>) -> Self {
+        Self {
+            inner: e.into(),
+            permanent: false,
+        }
+    }
+
+    fn permanent(e: impl Into<anyhow::Error>) -> Self {
+        Self {
+            inner: e.into(),
+            permanent: true,
+        }
+    }
+}
+
+impl std::fmt::Display for SyncError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.inner.fmt(f)
+    }
+}
+
+enum SyncKind {
+    Source(i64),
+    Destination(i64),
+}
+
+impl SyncKind {
+    fn write_error_status(&self, state: &AppState, msg: &str) {
+        let Ok(db) = state.db.lock() else {
+            tracing::error!("Failed to acquire DB lock for error status update");
+            return;
+        };
+        match self {
+            SyncKind::Source(id) => {
+                let _ = caldav_ics_sync::db::update_sync_status(&db, *id, "error", Some(msg));
+            }
+            SyncKind::Destination(id) => {
+                let _ = caldav_ics_sync::db::update_destination_sync_status(
+                    &db,
+                    *id,
+                    "error",
+                    Some(msg),
+                );
+            }
+        }
+    }
+}
+
+fn spawn_auto_sync<F, Fut>(
+    name: &str,
+    interval_secs: u64,
+    kind: SyncKind,
+    state: AppState,
+    sync_fn: F,
+) where
+    F: Fn() -> Fut + Send + Sync + 'static,
+    Fut: std::future::Future<Output = Result<String, RetryError<SyncError>>> + Send,
+{
+    let display_name = name.to_owned();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
+        loop {
+            interval.tick().await;
+            let strategy = ExponentialBackoff::from_millis(RETRY_BASE_MS)
+                .max_delay(Duration::from_millis(RETRY_MAX_MS))
+                .take(MAX_RETRIES);
+
+            match Retry::spawn(strategy, &sync_fn).await {
+                Ok(msg) => info!("{}", msg),
+                Err(e) if e.permanent => {
+                    tracing::error!("Auto-sync '{}' stopping: {}", display_name, e);
+                    break;
+                }
+                Err(e) => {
+                    let msg = e.to_string();
+                    tracing::error!(
+                        "Auto-sync '{}' failed after {} retries: {}",
+                        display_name,
+                        MAX_RETRIES,
+                        msg
+                    );
+                    kind.write_error_status(&state, &msg);
+                }
+            }
+        }
+    });
+    info!("Auto-sync enabled for {} (every {}s)", name, interval_secs);
+}
+
 fn start_auto_sync(state: AppState) {
     // Auto-sync sources (CalDAV -> ICS)
     let sources = {
@@ -81,46 +211,42 @@ fn start_auto_sync(state: AppState) {
         if source.sync_interval_secs > 0 {
             let state = state.clone();
             let id = source.id;
-            let interval_secs = source.sync_interval_secs as u64;
-            tokio::spawn(async move {
-                let mut interval =
-                    tokio::time::interval(std::time::Duration::from_secs(interval_secs));
-                loop {
-                    interval.tick().await;
-                    let (url, user, pass) = {
+            spawn_auto_sync(
+                &source.name,
+                source.sync_interval_secs as u64,
+                SyncKind::Source(id),
+                state.clone(),
+                move || {
+                    let state = state.clone();
+                    async move {
+                        let (url, user, pass) = {
+                            let db = state.db.lock().unwrap();
+                            match caldav_ics_sync::db::get_source(&db, id) {
+                                Ok(Some(s)) => (s.caldav_url, s.username, s.password),
+                                _ => {
+                                    return Err(RetryError::permanent(SyncError::permanent(
+                                        anyhow::anyhow!("Source {} no longer exists", id),
+                                    )));
+                                }
+                            }
+                        };
+                        let (events, calendars, ics_data) =
+                            caldav_ics_sync::api::sync::run_sync(&url, &user, &pass)
+                                .await
+                                .map_err(|e| RetryError::transient(SyncError::transient(e)))?;
                         let db = state.db.lock().unwrap();
-                        match caldav_ics_sync::db::get_source(&db, id) {
-                            Ok(Some(s)) => (s.caldav_url, s.username, s.password),
-                            _ => break,
-                        }
-                    };
-                    match caldav_ics_sync::api::sync::run_sync(&url, &user, &pass).await {
-                        Ok((events, calendars, ics_data)) => {
-                            let db = state.db.lock().unwrap();
-                            let _ = caldav_ics_sync::db::save_ics_data(&db, id, &ics_data);
-                            let _ = caldav_ics_sync::db::update_last_synced(&db, id);
-                            let _ = caldav_ics_sync::db::update_sync_status(&db, id, "ok", None);
-                            info!(
-                                "Auto-sync source {}: {} events from {} calendars",
-                                id, events, calendars
-                            );
-                        }
-                        Err(e) => {
-                            let db = state.db.lock().unwrap();
-                            let _ = caldav_ics_sync::db::update_sync_status(
-                                &db,
-                                id,
-                                "error",
-                                Some(&e.to_string()),
-                            );
-                            tracing::error!("Auto-sync failed for source {}: {}", id, e);
-                        }
+                        caldav_ics_sync::db::save_ics_data(&db, id, &ics_data)
+                            .map_err(|e| RetryError::transient(SyncError::transient(e)))?;
+                        caldav_ics_sync::db::update_last_synced(&db, id)
+                            .map_err(|e| RetryError::transient(SyncError::transient(e)))?;
+                        caldav_ics_sync::db::update_sync_status(&db, id, "ok", None)
+                            .map_err(|e| RetryError::transient(SyncError::transient(e)))?;
+                        Ok(format!(
+                            "Auto-sync source {}: {} events from {} calendars",
+                            id, events, calendars
+                        ))
                     }
-                }
-            });
-            info!(
-                "Auto-sync enabled for source {} (every {}s)",
-                source.name, interval_secs
+                },
             );
         }
     }
@@ -135,56 +261,46 @@ fn start_auto_sync(state: AppState) {
         if dest.sync_interval_secs > 0 {
             let state = state.clone();
             let id = dest.id;
-            let interval_secs = dest.sync_interval_secs as u64;
-            tokio::spawn(async move {
-                let mut interval =
-                    tokio::time::interval(std::time::Duration::from_secs(interval_secs));
-                loop {
-                    interval.tick().await;
-                    let d = {
+            spawn_auto_sync(
+                &dest.name,
+                dest.sync_interval_secs as u64,
+                SyncKind::Destination(id),
+                state.clone(),
+                move || {
+                    let state = state.clone();
+                    async move {
+                        let d = {
+                            let db = state.db.lock().unwrap();
+                            match caldav_ics_sync::db::get_destination(&db, id) {
+                                Ok(Some(d)) => d,
+                                _ => {
+                                    return Err(RetryError::permanent(SyncError::permanent(
+                                        anyhow::anyhow!("Destination {} no longer exists", id),
+                                    )));
+                                }
+                            }
+                        };
+                        let (uploaded, total) =
+                            caldav_ics_sync::api::reverse_sync::run_reverse_sync(
+                                &d.ics_url,
+                                &d.caldav_url,
+                                &d.calendar_name,
+                                &d.username,
+                                &d.password,
+                                d.sync_all,
+                                d.keep_local,
+                            )
+                            .await
+                            .map_err(|e| RetryError::transient(SyncError::transient(e)))?;
                         let db = state.db.lock().unwrap();
-                        match caldav_ics_sync::db::get_destination(&db, id) {
-                            Ok(Some(d)) => d,
-                            _ => break,
-                        }
-                    };
-                    match caldav_ics_sync::api::reverse_sync::run_reverse_sync(
-                        &d.ics_url,
-                        &d.caldav_url,
-                        &d.calendar_name,
-                        &d.username,
-                        &d.password,
-                        d.sync_all,
-                        d.keep_local,
-                    )
-                    .await
-                    {
-                        Ok((uploaded, total)) => {
-                            let db = state.db.lock().unwrap();
-                            let _ = caldav_ics_sync::db::update_destination_sync_status(
-                                &db, id, "ok", None,
-                            );
-                            info!(
-                                "Auto-sync destination {}: uploaded {} of {} events",
-                                id, uploaded, total
-                            );
-                        }
-                        Err(e) => {
-                            let db = state.db.lock().unwrap();
-                            let _ = caldav_ics_sync::db::update_destination_sync_status(
-                                &db,
-                                id,
-                                "error",
-                                Some(&e.to_string()),
-                            );
-                            tracing::error!("Auto-sync failed for destination {}: {}", id, e);
-                        }
+                        caldav_ics_sync::db::update_destination_sync_status(&db, id, "ok", None)
+                            .map_err(|e| RetryError::transient(SyncError::transient(e)))?;
+                        Ok(format!(
+                            "Auto-sync destination {}: uploaded {} of {} events",
+                            id, uploaded, total
+                        ))
                     }
-                }
-            });
-            info!(
-                "Auto-sync enabled for destination {} (every {}s)",
-                dest.name, interval_secs
+                },
             );
         }
     }

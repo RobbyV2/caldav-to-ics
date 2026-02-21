@@ -36,8 +36,6 @@ Open `http://localhost:6765` to access the dashboard.
 
 ## Docker Compose
 
-### Basic
-
 ```yaml
 services:
   cal-sync:
@@ -47,50 +45,33 @@ services:
       - '6765:6765'
     volumes:
       - ./data:/data
-    restart: unless-stopped
-```
-
-### With HTTP Basic Auth
-
-Since the app has no built-in authentication, you can front it with an nginx basic auth proxy:
-
-```yaml
-services:
-  cal-sync:
-    image: ghcr.io/robbyv2/caldav-ics-sync:latest
-    container_name: cal-sync
-    volumes:
-      - ./data:/data
-    restart: unless-stopped
-
-  proxy:
-    image: beevelop/nginx-basic-auth
-    container_name: cal-sync-proxy
-    ports:
-      - '6765:80'
-    environment:
-      - FORWARD_HOST=cal-sync
-      - FORWARD_PORT=6765
-      - HTPASSWD=admin:$$apr1$$odHl5EJN$$KbxMfo86Qdve2FH4owePn.
-    depends_on:
-      - cal-sync
+    # Optional: uncomment to enable HTTP Basic Auth on all routes.
+    # Use AUTH_PASSWORD for plain text or AUTH_PASSWORD_HASH for argon2 (not both).
+    # environment:
+    #   - AUTH_USERNAME=admin
+    #   - AUTH_PASSWORD=yourpassword
+    #   # Or use a hashed password instead:
+    #   # - AUTH_PASSWORD_HASH=$$argon2id$$v=19$$m=19456,t=2,p=1$$...
     restart: unless-stopped
 ```
 
 > [!NOTE]
-> Generate your own credentials with `htpasswd -nb admin yourpassword` and replace the `HTPASSWD` value. Use `$$` to escape `$` signs in docker compose.
+> `AUTH_USERNAME` plus exactly one of `AUTH_PASSWORD` or `AUTH_PASSWORD_HASH` enables auth. Setting both password vars is an error. Generate a hash with: `echo -n "yourpassword" | argon2 yoursalt -id -e`
 
 ## Configuration
 
 All sync configuration (sources, destinations, credentials) is managed through the web UI. The only environment variables are for server tuning:
 
-| Variable           | Default                 | Description                    |
-| ------------------ | ----------------------- | ------------------------------ |
-| `SERVER_HOST`      | `0.0.0.0`               | Bind address                   |
-| `SERVER_PORT`      | `6765`                  | Rust server port (user-facing) |
-| `PORT`             | `6766`                  | Next.js internal port          |
-| `SERVER_PROXY_URL` | `http://localhost:6766` | Internal proxy target          |
-| `DATA_DIR`         | `./data`                | Directory for SQLite database  |
+| Variable             | Default                 | Description                                            |
+| -------------------- | ----------------------- | ------------------------------------------------------ |
+| `SERVER_HOST`        | `0.0.0.0`               | Bind address                                           |
+| `SERVER_PORT`        | `6765`                  | Rust server port (user-facing)                         |
+| `PORT`               | `6766`                  | Next.js internal port                                  |
+| `SERVER_PROXY_URL`   | `http://localhost:6766` | Internal proxy target                                  |
+| `DATA_DIR`           | `./data`                | Directory for SQLite database                          |
+| `AUTH_USERNAME`      | _(unset)_               | Basic Auth username (required to enable auth)          |
+| `AUTH_PASSWORD`      | _(unset)_               | Plain text password (mutually exclusive with hash)     |
+| `AUTH_PASSWORD_HASH` | _(unset)_               | Argon2 PHC-format hash (mutually exclusive with above) |
 
 ## Concepts
 

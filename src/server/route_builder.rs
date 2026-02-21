@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use axum::{
     Router,
     extract::{Request, State},
@@ -8,11 +10,7 @@ use axum::{
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
 
-async fn proxy_to_nextjs(mut req: Request) -> Response {
-    let port = std::env::var("PORT").unwrap_or_else(|_| "6766".to_string());
-    let proxy_url =
-        std::env::var("SERVER_PROXY_URL").unwrap_or_else(|_| format!("http://127.0.0.1:{}", port));
-
+async fn proxy_to_nextjs(State(proxy_url): State<Arc<String>>, mut req: Request) -> Response {
     let proxy_uri = match proxy_url.parse::<hyper::Uri>() {
         Ok(uri) => uri,
         Err(e) => {
@@ -82,12 +80,17 @@ async fn serve_ics(
     }
 }
 
-pub async fn register_routes(state: crate::api::AppState) -> Router {
+pub async fn register_routes(state: crate::api::AppState, proxy_url: &str) -> Router {
     let api_routes = crate::api::routes();
+    let proxy_url = Arc::new(proxy_url.to_owned());
+
+    let fallback_router = Router::new()
+        .fallback(proxy_to_nextjs)
+        .with_state(proxy_url);
 
     Router::new()
         .nest("/api", api_routes)
         .route("/ics/{*path}", get(serve_ics))
-        .fallback(proxy_to_nextjs)
+        .merge(fallback_router)
         .with_state(state)
 }
