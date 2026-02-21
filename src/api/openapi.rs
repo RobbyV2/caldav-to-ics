@@ -43,7 +43,7 @@ use utoipa::OpenApi;
     )),
     info(
         title = "CalDAV/ICS Sync API",
-        version = "0.2.0",
+        version = env!("CARGO_PKG_VERSION"),
         description = "Bidirectional CalDAV and ICS synchronization API. Manage CalDAV-to-ICS sources (pull events and serve as ICS) and ICS-to-CalDAV destinations (push ICS events to CalDAV servers)."
     )
 )]

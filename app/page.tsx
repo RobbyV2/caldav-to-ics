@@ -44,16 +44,15 @@ type Tab = 'sources' | 'destinations'
 
 // --- Form defaults ---
 
-type IntervalUnit = 'seconds' | 'minutes' | 'hours'
-
 const emptySrcForm = {
   name: '',
   caldav_url: '',
   username: '',
   password: '',
   ics_path: '',
-  sync_interval_value: 60,
-  sync_interval_unit: 'minutes' as IntervalUnit,
+  sync_interval_hours: 1,
+  sync_interval_minutes: 0,
+  sync_interval_seconds: 0,
 }
 
 const emptyDestForm = {
@@ -63,29 +62,84 @@ const emptyDestForm = {
   calendar_name: '',
   username: '',
   password: '',
-  sync_interval_value: 60,
-  sync_interval_unit: 'minutes' as IntervalUnit,
+  sync_interval_hours: 1,
+  sync_interval_minutes: 0,
+  sync_interval_seconds: 0,
   sync_all: false,
   keep_local: false,
 }
 
-function toSecs(value: number, unit: IntervalUnit): number {
-  if (unit === 'hours') return value * 3600
-  if (unit === 'minutes') return value * 60
-  return value
+function toSecs(h: number, m: number, s: number): number {
+  return h * 3600 + m * 60 + s
 }
 
-function fromSecs(secs: number): { value: number; unit: IntervalUnit } {
-  if (secs === 0) return { value: 0, unit: 'seconds' }
-  if (secs % 3600 === 0) return { value: secs / 3600, unit: 'hours' }
-  if (secs % 60 === 0) return { value: secs / 60, unit: 'minutes' }
-  return { value: secs, unit: 'seconds' }
+function fromSecs(secs: number): { hours: number; minutes: number; seconds: number } {
+  const hours = Math.floor(secs / 3600)
+  const minutes = Math.floor((secs % 3600) / 60)
+  const seconds = secs % 60
+  return { hours, minutes, seconds }
 }
 
 function formatInterval(secs: number): string {
   if (secs === 0) return 'Manual only'
-  const { value, unit } = fromSecs(secs)
-  return `${value} ${unit}`
+  const { hours, minutes, seconds } = fromSecs(secs)
+  const parts: string[] = []
+  if (hours > 0) parts.push(`${hours}h`)
+  if (minutes > 0) parts.push(`${minutes}m`)
+  if (seconds > 0 || parts.length === 0) parts.push(`${seconds}s`)
+  return parts.join(' ')
+}
+
+function IntervalInput({
+  hours,
+  minutes,
+  seconds,
+  onChange,
+}: {
+  hours: number
+  minutes: number
+  seconds: number
+  onChange: (field: string, value: number) => void
+}) {
+  return (
+    <div className="form-field full-width">
+      <label>Sync Interval (all zero = manual only)</label>
+      <div className="interval-boxes">
+        <div className="interval-box">
+          <input
+            className="app-input-text"
+            type="number"
+            min="0"
+            value={hours}
+            onChange={e => onChange('sync_interval_hours', parseInt(e.target.value) || 0)}
+          />
+          <span>Hours</span>
+        </div>
+        <div className="interval-box">
+          <input
+            className="app-input-text"
+            type="number"
+            min="0"
+            max="59"
+            value={minutes}
+            onChange={e => onChange('sync_interval_minutes', parseInt(e.target.value) || 0)}
+          />
+          <span>Minutes</span>
+        </div>
+        <div className="interval-box">
+          <input
+            className="app-input-text"
+            type="number"
+            min="0"
+            max="59"
+            value={seconds}
+            onChange={e => onChange('sync_interval_seconds', parseInt(e.target.value) || 0)}
+          />
+          <span>Seconds</span>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 // --- Helpers ---
@@ -162,7 +216,7 @@ function SyncItemList<T extends SyncItem>({
       <div className="section-header">
         <h2>{title}</h2>
         <button className="app-btn app-btn-primary" onClick={onAdd}>
-          <i className="icons10-plus" />
+          <span>+</span>
           <span>{addButtonText}</span>
         </button>
       </div>
@@ -451,15 +505,16 @@ export default function Home() {
   }
 
   function openSrcEdit(src: Source) {
-    const interval = fromSecs(src.sync_interval_secs)
+    const { hours, minutes, seconds } = fromSecs(src.sync_interval_secs)
     setSrcForm({
       name: src.name,
       caldav_url: src.caldav_url,
       username: src.username,
       password: '',
       ics_path: src.ics_path,
-      sync_interval_value: interval.value,
-      sync_interval_unit: interval.unit,
+      sync_interval_hours: hours,
+      sync_interval_minutes: minutes,
+      sync_interval_seconds: seconds,
     })
     setEditingSrc(src)
     setSrcDialogOpen(true)
@@ -474,8 +529,11 @@ export default function Home() {
     e.preventDefault()
     const url = editingSrc ? `/api/sources/${editingSrc.id}` : '/api/sources'
     const method = editingSrc ? 'PUT' : 'POST'
-    const { sync_interval_value, sync_interval_unit, ...rest } = srcForm
-    const body = { ...rest, sync_interval_secs: toSecs(sync_interval_value, sync_interval_unit) }
+    const { sync_interval_hours, sync_interval_minutes, sync_interval_seconds, ...rest } = srcForm
+    const body = {
+      ...rest,
+      sync_interval_secs: toSecs(sync_interval_hours, sync_interval_minutes, sync_interval_seconds),
+    }
     await apiSubmit(url, method, body, () => {
       closeSrcDialog()
       fetchSources()
@@ -491,7 +549,7 @@ export default function Home() {
   }
 
   function openDestEdit(dest: Destination) {
-    const interval = fromSecs(dest.sync_interval_secs)
+    const { hours, minutes, seconds } = fromSecs(dest.sync_interval_secs)
     setDestForm({
       name: dest.name,
       ics_url: dest.ics_url,
@@ -499,8 +557,9 @@ export default function Home() {
       calendar_name: dest.calendar_name,
       username: dest.username,
       password: '',
-      sync_interval_value: interval.value,
-      sync_interval_unit: interval.unit,
+      sync_interval_hours: hours,
+      sync_interval_minutes: minutes,
+      sync_interval_seconds: seconds,
       sync_all: dest.sync_all,
       keep_local: dest.keep_local,
     })
@@ -517,8 +576,11 @@ export default function Home() {
     e.preventDefault()
     const url = editingDest ? `/api/destinations/${editingDest.id}` : '/api/destinations'
     const method = editingDest ? 'PUT' : 'POST'
-    const { sync_interval_value, sync_interval_unit, ...rest } = destForm
-    const body = { ...rest, sync_interval_secs: toSecs(sync_interval_value, sync_interval_unit) }
+    const { sync_interval_hours, sync_interval_minutes, sync_interval_seconds, ...rest } = destForm
+    const body = {
+      ...rest,
+      sync_interval_secs: toSecs(sync_interval_hours, sync_interval_minutes, sync_interval_seconds),
+    }
     await apiSubmit(url, method, body, () => {
       closeDestDialog()
       fetchDestinations()
@@ -822,38 +884,12 @@ export default function Home() {
             required
           />
         </div>
-        <div className="form-field">
-          <label>Sync Interval (0 = manual only)</label>
-          <div className="interval-input">
-            <input
-              className="app-input-text"
-              type="number"
-              min="0"
-              value={srcForm.sync_interval_value}
-              onChange={e =>
-                setSrcForm(p => ({
-                  ...p,
-                  sync_interval_value: parseInt(e.target.value) || 0,
-                }))
-              }
-              required
-            />
-            <select
-              className="app-input-text"
-              value={srcForm.sync_interval_unit}
-              onChange={e =>
-                setSrcForm(p => ({
-                  ...p,
-                  sync_interval_unit: e.target.value as IntervalUnit,
-                }))
-              }
-            >
-              <option value="seconds">Seconds</option>
-              <option value="minutes">Minutes</option>
-              <option value="hours">Hours</option>
-            </select>
-          </div>
-        </div>
+        <IntervalInput
+          hours={srcForm.sync_interval_hours}
+          minutes={srcForm.sync_interval_minutes}
+          seconds={srcForm.sync_interval_seconds}
+          onChange={(field, value) => setSrcForm(p => ({ ...p, [field]: value }))}
+        />
       </FormDialog>
 
       {/* ─── Destination form dialog ─── */}
@@ -928,39 +964,13 @@ export default function Home() {
             placeholder={editingDest ? 'Unchanged if empty' : ''}
           />
         </div>
-        <div className="form-field">
-          <label>Sync Interval (0 = manual only)</label>
-          <div className="interval-input">
-            <input
-              className="app-input-text"
-              type="number"
-              min="0"
-              value={destForm.sync_interval_value}
-              onChange={e =>
-                setDestForm(p => ({
-                  ...p,
-                  sync_interval_value: parseInt(e.target.value) || 0,
-                }))
-              }
-              required
-            />
-            <select
-              className="app-input-text"
-              value={destForm.sync_interval_unit}
-              onChange={e =>
-                setDestForm(p => ({
-                  ...p,
-                  sync_interval_unit: e.target.value as IntervalUnit,
-                }))
-              }
-            >
-              <option value="seconds">Seconds</option>
-              <option value="minutes">Minutes</option>
-              <option value="hours">Hours</option>
-            </select>
-          </div>
-        </div>
-        <div className="form-field">
+        <IntervalInput
+          hours={destForm.sync_interval_hours}
+          minutes={destForm.sync_interval_minutes}
+          seconds={destForm.sync_interval_seconds}
+          onChange={(field, value) => setDestForm(p => ({ ...p, [field]: value }))}
+        />
+        <div className="form-field full-width">
           <div className="form-checkbox">
             <input
               type="checkbox"

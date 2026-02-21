@@ -2,43 +2,43 @@ name: CI Pipeline
 
 on:
   push:
-    branches: [ "main" ]
-    tags: [ "v*" ]
+    branches: ['main']
+    tags: ['v*']
   pull_request:
-    branches: [ "main" ]
+    branches: ['main']
 
 jobs:
   format_lint:
     name: Lint & Format
     runs-on: ubuntu-latest
     # Require workflow approval on forks explicitly via environment protection if possible,
-    # or just use default github action behavior for outside forks. 
+    # or just use default github action behavior for outside forks.
     # For PRs from forks, 'pull_request' triggers are subject to "Require approval for all outside collaborators".
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Setup Node/Bun
         uses: oven-sh/setup-bun@v1
         with:
           bun-version: latest
-          
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-          
+
       - name: Install JS Deps
         run: bun install --frozen-lockfile
-        
+
       - name: Check JS Formatting
         run: bun run format:check
-        
+
       - name: JS Linting
         run: bun run lint
-        
+
       - name: Rust Formatting
         run: cargo fmt -- --check
-        
+
       - name: Rust Clippy
         run: cargo clippy -- -D warnings
 
@@ -57,7 +57,7 @@ jobs:
             runner: ubuntu-latest
           - platform: linux/arm64
             runner: ubuntu-24.04-arm
-    
+
     steps:
       - uses: actions/checkout@v4
 
@@ -110,7 +110,7 @@ jobs:
     permissions:
       contents: read
       packages: write
-    
+
     steps:
       - name: Set image name
         run: echo "REGISTRY_IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
