@@ -44,7 +44,7 @@ services:
     image: ghcr.io/robbyv2/caldav-ics-sync:latest
     container_name: cal-sync
     ports:
-      - "6765:6765"
+      - '6765:6765'
     volumes:
       - ./data:/data
     restart: unless-stopped
@@ -67,7 +67,7 @@ services:
     image: beevelop/nginx-basic-auth
     container_name: cal-sync-proxy
     ports:
-      - "6765:80"
+      - '6765:80'
     environment:
       - FORWARD_HOST=cal-sync
       - FORWARD_PORT=6765
